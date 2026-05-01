@@ -77,6 +77,7 @@ class OpenCodeSession:
         self.exit_code: int | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._dispatcher_task: asyncio.Task[None] | None = None
+        self._awaiting_user_reply: bool = False
 
     async def start(self) -> None:
         """Launch the opencode subprocess and start reader/dispatcher tasks."""
@@ -100,6 +101,7 @@ class OpenCodeSession:
         """Start a new opencode run continuing the previous session with a follow-up message."""
         if self.state not in {SessionState.RUNNING, SessionState.AWAITING_INPUT}:
             raise InvalidStateError(f"Cannot send input in state {self.state}")
+        self._awaiting_user_reply = False
         # Continue the last session by spawning a new process with --continue
         self.process = await asyncio.create_subprocess_exec(
             "opencode", "run", "--continue", text,
@@ -111,7 +113,11 @@ class OpenCodeSession:
         self.state = SessionState.RUNNING
         if self._reader_task is not None:
             self._reader_task.cancel()
+        if self._dispatcher_task is not None:
+            self._dispatcher_task.cancel()
+        self.output_queue = asyncio.Queue()
         self._reader_task = asyncio.create_task(self._read_output())
+        self._dispatcher_task = asyncio.create_task(self._dispatch_output())
 
     def get_status(self) -> SessionStatus:
         """Return a snapshot of the current session state."""
@@ -193,8 +199,14 @@ class OpenCodeSession:
 
         self.exit_code = await self.process.wait()
         self.ended_at = datetime.now(UTC)
-        self.state = SessionState.COMPLETED if self.exit_code == 0 else SessionState.FAILED
-        logger.info("Session ended: exit_code=%s state=%s", self.exit_code, self.state)
+        if self.exit_code == 0:
+            # Keep session alive so user can always send a follow-up reply
+            self._awaiting_user_reply = True
+            self.state = SessionState.AWAITING_INPUT
+            logger.info("Session step complete, awaiting user follow-up: exit_code=%s", self.exit_code)
+        else:
+            self.state = SessionState.FAILED
+            logger.info("Session ended: exit_code=%s state=%s", self.exit_code, self.state)
         await self.output_queue.put(None)
 
     async def _dispatch_output(self) -> None:
@@ -215,6 +227,12 @@ class OpenCodeSession:
                     if buffer:
                         await self._send_chunks("\n".join(s.rstrip("\n") for s in buffer))
                         buffer.clear()
+                    if self._awaiting_user_reply:
+                        # Keep session alive — user can reply or /cancel to end
+                        await self.send_callback(
+                            "💬 Type your reply to continue, or /cancel to end the session."
+                        )
+                        break
                     if self.exit_code == 0:
                         await self.send_callback(
                             f"✅ Session completed successfully.\nTask: {self.task.description}"

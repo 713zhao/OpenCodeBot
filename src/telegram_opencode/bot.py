@@ -82,7 +82,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     path = Path(args[1]).expanduser().resolve()
 
     if not path.exists():
-        await message.reply_text(f"❌ Directory not found: {path}")
+        context.user_data["pending_mkdir"] = {
+            "path": str(path),
+            "task_type": task_type,
+            "description": " ".join(args[2:]),
+        }
+        await message.reply_text(
+            f"⚠️ Directory not found: {path}\n"
+            "Would you like to create it? Reply *yes* or *no*.",
+            parse_mode="Markdown",
+        )
         return
 
     if not path.is_dir():
@@ -204,6 +213,65 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     user_id: int = update.effective_user.id
     message = update.message
+
+    # Handle pending directory-creation confirmation
+    pending = (context.user_data or {}).get("pending_mkdir")
+    if pending is not None:
+        reply = (message.text or "").strip().lower()
+        if reply in ("yes", "y"):
+            mkdir_path = Path(pending["path"])
+            try:
+                mkdir_path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                context.user_data.pop("pending_mkdir", None)
+                await message.reply_text(f"❌ Failed to create directory: {exc}")
+                return
+            context.user_data.pop("pending_mkdir", None)
+            pending_sessions: dict[int, OpenCodeSession] = context.bot_data.setdefault("sessions", {})
+            if pending_sessions.get(user_id) is not None:
+                await message.reply_text("⚠️ A session is already running. Send /cancel to stop it first.")
+                return
+            task_type = pending["task_type"]
+            description = pending["description"]
+            task = Task(
+                description=description,
+                task_type=task_type,  # type: ignore[arg-type]
+                working_directory=mkdir_path,
+            )
+            bot = context.bot
+
+            async def _mkdir_send_callback(text: str) -> None:
+                await bot.send_message(chat_id=user_id, text=text)
+
+            new_session = OpenCodeSession(task, _mkdir_send_callback)
+            try:
+                await new_session.start()
+            except FileNotFoundError:
+                await message.reply_text(
+                    "❌ Could not start session: the `opencode` CLI was not found.\n"
+                    "Please ensure OpenCode is installed and available on PATH."
+                )
+                return
+            except Exception as exc:
+                logger.error("Failed to start session for user_id=%s: %s", user_id, exc, exc_info=True)
+                await message.reply_text(f"❌ Failed to start session: {exc}")
+                return
+            pending_sessions[user_id] = new_session
+            logger.info("Session started (after mkdir) for user_id=%s type=%s dir=%s", user_id, task_type, mkdir_path)
+            type_label = "Existing project" if task_type == "existing" else "New project"
+            await message.reply_text(
+                f"✅ Directory created and session started\n"
+                f"Task: {description}\n"
+                f"Type: {type_label}\n"
+                f"Directory: {mkdir_path}"
+            )
+        elif reply in ("no", "n"):
+            context.user_data.pop("pending_mkdir", None)
+            await message.reply_text("❌ Session creation cancelled.")
+        else:
+            await message.reply_text("Please reply with *yes* or *no*.", parse_mode="Markdown")
+        return
+
     sessions: dict[int, OpenCodeSession] = context.bot_data.get("sessions", {})
     session = sessions.get(user_id)
 
