@@ -4,7 +4,7 @@ An async Python service that bridges authorized Telegram users to live [OpenCode
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.13.5 (recommended; 3.11+ minimum)
 - `opencode` CLI installed and on `PATH`
 - A Telegram Bot Token from [@BotFather](https://t.me/BotFather)
 - Your Telegram user ID (e.g., from [@userinfobot](https://t.me/userinfobot))
