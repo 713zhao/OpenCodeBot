@@ -102,7 +102,10 @@ async def test_start_transitions_to_running() -> None:
     mock_exec.assert_called_once()
     call_args = mock_exec.call_args
     assert call_args.args[0] == "opencode"
-    assert call_args.kwargs["cwd"] == TASK.working_directory
+    assert call_args.args[1] == "run"
+    assert call_args.args[2] == TASK.description
+    assert call_args.args[3] == "--dir"
+    assert call_args.args[4] == str(TASK.working_directory)
 
 
 async def test_start_twice_raises() -> None:
@@ -129,24 +132,30 @@ async def test_start_twice_raises() -> None:
 async def test_send_input_in_running_state() -> None:
     session = make_session()
     proc = make_process()
-    session.process = proc
     session.state = SessionState.RUNNING
 
-    await session.send_input("hello")
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
+        await session.send_input("hello")
 
-    proc.stdin.write.assert_called_once_with(b"hello\n")
-    proc.stdin.drain.assert_awaited_once()
+    mock_exec.assert_called_once()
+    call_args = mock_exec.call_args
+    assert call_args.args[0] == "opencode"
+    assert call_args.args[1] == "run"
+    assert call_args.args[2] == "--continue"
+    assert call_args.args[3] == "hello"
 
 
 async def test_send_input_in_awaiting_input_state() -> None:
     session = make_session()
     proc = make_process()
-    session.process = proc
     session.state = SessionState.AWAITING_INPUT
 
-    await session.send_input("yes")
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
+        await session.send_input("yes")
 
-    proc.stdin.write.assert_called_once_with(b"yes\n")
+    mock_exec.assert_called_once()
+    assert mock_exec.call_args.args[2] == "--continue"
+    assert mock_exec.call_args.args[3] == "yes"
 
 
 async def test_send_input_idle_raises() -> None:
@@ -346,15 +355,17 @@ def test_get_status_fields() -> None:
 
 
 async def test_start_writes_task_description_to_stdin() -> None:
-    """start() must auto-prime OpenCode by writing the task description as first stdin line."""
+    """start() must pass task description as CLI argument to 'opencode run' (FR-003)."""
     session = make_session()
     proc = make_process()
 
-    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
         await session.start()
 
-    proc.stdin.write.assert_called_once_with((TASK.description + "\n").encode())
-    proc.stdin.drain.assert_awaited_once()
+    call_args = mock_exec.call_args
+    assert call_args.args[0] == "opencode"
+    assert call_args.args[1] == "run"
+    assert call_args.args[2] == TASK.description
 
     # Cleanup tasks to avoid warnings
     if session._reader_task:

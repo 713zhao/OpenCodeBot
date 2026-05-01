@@ -64,7 +64,9 @@ async def test_full_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     context = make_context(bot_data, ["existing", "/tmp", "Integration", "test", "task"])
 
     with (
-        patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)),
+        patch(
+            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)
+        ) as mock_exec,
         patch.object(Path, "exists", return_value=True),
         patch.object(Path, "is_dir", return_value=True),
         patch("os.access", return_value=True),
@@ -76,16 +78,21 @@ async def test_full_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = bot_data["sessions"]  # type: ignore[index]
     assert USER_ID in sessions  # type: ignore[operator]
 
-    # T037 / FR-003: verify task description was auto-primed to OpenCode stdin
-    mock_process.stdin.write.assert_any_call(b"Integration test task\n")
+    # T037 / FR-003: verify task description was passed as CLI arg to 'opencode run'
+    assert mock_exec.call_args.args[1] == "run"
+    assert mock_exec.call_args.args[2] == "Integration test task"
 
-    # --- send plain text (stdin relay) ---
+    # --- send plain text (continue relay) ---
     # Session is RUNNING immediately after start (reader tasks haven't yielded yet).
     # Send input before sleeping so the session hasn't transitioned to COMPLETED yet.
     msg_update = make_update(USER_ID, text="y")
     msg_context = make_context(bot_data)
-    await message_handler(msg_update, msg_context)
-    mock_process.stdin.write.assert_called_with(b"y\n")
+    with patch(
+        "asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)
+    ) as mock_continue:
+        await message_handler(msg_update, msg_context)
+    assert mock_continue.call_args.args[2] == "--continue"
+    assert mock_continue.call_args.args[3] == "y"
 
     # Let reader/dispatcher coroutines make progress (may exhaust readline → COMPLETED)
     await asyncio.sleep(0.05)

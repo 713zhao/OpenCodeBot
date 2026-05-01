@@ -83,30 +83,35 @@ class OpenCodeSession:
         if self.state is not SessionState.IDLE:
             raise InvalidStateError(f"Cannot start session in state {self.state}")
 
+        # FR-003: pass description as CLI arguments to `opencode run`
         self.process = await asyncio.create_subprocess_exec(
-            "opencode",
-            cwd=self.task.working_directory,
+            "opencode", "run", self.task.description,
+            "--dir", str(self.task.working_directory),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         self.started_at = datetime.now(UTC)
         self.state = SessionState.RUNNING
-        # FR-003: auto-prime OpenCode with the task description as first stdin line
-        assert self.process.stdin is not None
-        self.process.stdin.write((self.task.description + "\n").encode())
-        await self.process.stdin.drain()
         self._reader_task = asyncio.create_task(self._read_output())
         self._dispatcher_task = asyncio.create_task(self._dispatch_output())
 
     async def send_input(self, text: str) -> None:
-        """Write a line of text to the subprocess stdin."""
+        """Start a new opencode run continuing the previous session with a follow-up message."""
         if self.state not in {SessionState.RUNNING, SessionState.AWAITING_INPUT}:
             raise InvalidStateError(f"Cannot send input in state {self.state}")
-        assert self.process is not None
-        assert self.process.stdin is not None
-        self.process.stdin.write((text + "\n").encode())
-        await self.process.stdin.drain()
+        # Continue the last session by spawning a new process with --continue
+        self.process = await asyncio.create_subprocess_exec(
+            "opencode", "run", "--continue", text,
+            "--dir", str(self.task.working_directory),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            stdin=asyncio.subprocess.DEVNULL,
+        )
+        self.state = SessionState.RUNNING
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+        self._reader_task = asyncio.create_task(self._read_output())
 
     def get_status(self) -> SessionStatus:
         """Return a snapshot of the current session state."""
