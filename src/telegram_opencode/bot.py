@@ -114,7 +114,18 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await bot.send_message(chat_id=user_id, text=text)
 
     session = OpenCodeSession(task, send_callback)
-    await session.start()
+    try:
+        await session.start()
+    except FileNotFoundError:
+        await message.reply_text(
+            "❌ Could not start session: the `opencode` CLI was not found.\n"
+            "Please ensure OpenCode is installed and available on PATH."
+        )
+        return
+    except Exception as exc:
+        logger.error("Failed to start session for user_id=%s: %s", user_id, exc, exc_info=True)
+        await message.reply_text(f"❌ Failed to start session: {exc}")
+        return
     sessions[user_id] = session
     logger.info("Session started for user_id=%s type=%s dir=%s", user_id, task_type, path)
 
