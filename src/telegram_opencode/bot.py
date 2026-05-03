@@ -79,7 +79,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await message.reply_text("Invalid task type. Use 'existing' or 'new'.")
         return
 
-    path = Path(args[1]).expanduser().resolve()
+    path = Path(args[1].strip('\"')).expanduser().resolve()
 
     if not path.exists():
         context.user_data["pending_mkdir"] = {
