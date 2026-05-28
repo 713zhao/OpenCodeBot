@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class Task:
     description: str
     task_type: Literal["existing", "new"]
     working_directory: Path
+    agent_type: Literal["opencode", "claude"] = "opencode"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class SessionStatus:
     working_directory: str | None
     recent_output: list[str]
     started_at: datetime | None
+    agent_type: str | None = "opencode"
 
 
 _CHUNK_SIZE = 4096  # NFR-005: Telegram message size limit
@@ -65,9 +67,11 @@ class OpenCodeSession:
         self,
         task: Task,
         send_callback: Callable[[str], Awaitable[None]],
+        on_turn_complete: Optional[Callable[[int, int], Awaitable[None]]] = None,
     ) -> None:
         self.task = task
         self.send_callback = send_callback
+        self.on_turn_complete = on_turn_complete
         self.state: SessionState = SessionState.IDLE
         self.output_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self.recent_output: deque[str] = deque(maxlen=20)
@@ -78,20 +82,37 @@ class OpenCodeSession:
         self._reader_task: asyncio.Task[None] | None = None
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._awaiting_user_reply: bool = False
+        self._turn_input_chars: int = len(task.description)
+        self._turn_output_chars: int = 0
 
     async def start(self) -> None:
         """Launch the opencode subprocess and start reader/dispatcher tasks."""
         if self.state is not SessionState.IDLE:
             raise InvalidStateError(f"Cannot start session in state {self.state}")
 
-        # FR-003: pass description as CLI arguments to `opencode run`
-        self.process = await asyncio.create_subprocess_exec(
-            "opencode", "run", self.task.description,
-            "--dir", str(self.task.working_directory),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-        )
+        if self.task.agent_type == "claude":
+            self.process = await asyncio.create_subprocess_exec(
+                "claude",
+                "--dangerously-skip-permissions",
+                "-p",
+                self.task.description,
+                cwd=str(self.task.working_directory),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
+        else:
+            # FR-003: pass description as CLI arguments to `opencode run`
+            self.process = await asyncio.create_subprocess_exec(
+                "opencode",
+                "run",
+                self.task.description,
+                "--dir",
+                str(self.task.working_directory),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
         self.started_at = datetime.now(UTC)
         self.state = SessionState.RUNNING
         self._reader_task = asyncio.create_task(self._read_output())
@@ -102,14 +123,33 @@ class OpenCodeSession:
         if self.state not in {SessionState.RUNNING, SessionState.AWAITING_INPUT}:
             raise InvalidStateError(f"Cannot send input in state {self.state}")
         self._awaiting_user_reply = False
-        # Continue the last session by spawning a new process with --continue
-        self.process = await asyncio.create_subprocess_exec(
-            "opencode", "run", "--continue", text,
-            "--dir", str(self.task.working_directory),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-        )
+        self._turn_input_chars = len(text)
+        self._turn_output_chars = 0
+
+        if self.task.agent_type == "claude":
+            self.process = await asyncio.create_subprocess_exec(
+                "claude",
+                "-p",
+                "-c",
+                text,
+                cwd=str(self.task.working_directory),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
+        else:
+            # Continue the last session by spawning a new process with --continue
+            self.process = await asyncio.create_subprocess_exec(
+                "opencode",
+                "run",
+                "--continue",
+                text,
+                "--dir",
+                str(self.task.working_directory),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
         self.state = SessionState.RUNNING
         if self._reader_task is not None:
             self._reader_task.cancel()
@@ -128,6 +168,7 @@ class OpenCodeSession:
             working_directory=str(self.task.working_directory),
             recent_output=list(self.recent_output),
             started_at=self.started_at,
+            agent_type=self.task.agent_type,
         )
 
     async def terminate(self) -> None:
@@ -136,7 +177,10 @@ class OpenCodeSession:
             return
 
         assert self.process is not None
-        self.process.terminate()
+        try:
+            self.process.terminate()
+        except ProcessLookupError:
+            pass
 
         try:
             await asyncio.wait_for(self.process.wait(), timeout=5.0)
@@ -203,7 +247,9 @@ class OpenCodeSession:
             # Keep session alive so user can always send a follow-up reply
             self._awaiting_user_reply = True
             self.state = SessionState.AWAITING_INPUT
-            logger.info("Session step complete, awaiting user follow-up: exit_code=%s", self.exit_code)
+            logger.info(
+                "Session step complete, awaiting user follow-up: exit_code=%s", self.exit_code
+            )
         else:
             self.state = SessionState.FAILED
             logger.info("Session ended: exit_code=%s state=%s", self.exit_code, self.state)
@@ -219,14 +265,25 @@ class OpenCodeSession:
                     item = await asyncio.wait_for(self.output_queue.get(), timeout=1.0)
                 except TimeoutError:
                     if buffer:
-                        await self._send_chunks("\n".join(s.rstrip("\n") for s in buffer))
+                        text = "\n".join(s.rstrip("\n") for s in buffer)
+                        self._turn_output_chars += len(text)
+                        await self._send_chunks(text)
                         buffer.clear()
                     continue
 
                 if item is None:
                     if buffer:
-                        await self._send_chunks("\n".join(s.rstrip("\n") for s in buffer))
+                        text = "\n".join(s.rstrip("\n") for s in buffer)
+                        self._turn_output_chars += len(text)
+                        await self._send_chunks(text)
                         buffer.clear()
+                    if self.on_turn_complete is not None:
+                        try:
+                            await self.on_turn_complete(
+                                self._turn_input_chars, self._turn_output_chars
+                            )
+                        except Exception:
+                            logger.warning("on_turn_complete callback failed", exc_info=True)
                     if self._awaiting_user_reply:
                         # Keep session alive — user can reply or /cancel to end
                         await self.send_callback(

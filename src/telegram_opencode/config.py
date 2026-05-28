@@ -15,6 +15,7 @@ class Config:
 
     bot_token: str
     authorized_user_ids: frozenset[int]
+    monthly_token_budget: int | None = None
 
 
 def load_config() -> Config:
@@ -37,11 +38,17 @@ def load_config() -> Config:
     try:
         user_ids = frozenset(int(uid.strip()) for uid in raw_ids.split(",") if uid.strip())
     except ValueError as exc:
-        raise ValueError(
-            "AUTHORIZED_USER_IDS must contain at least one valid integer"
-        ) from exc
+        raise ValueError("AUTHORIZED_USER_IDS must contain at least one valid integer") from exc
 
     if not user_ids:
         raise ValueError("AUTHORIZED_USER_IDS must contain at least one valid integer")
 
-    return Config(bot_token=token, authorized_user_ids=user_ids)
+    monthly_budget: int | None = None
+    raw_budget = os.environ.get("MONTHLY_TOKEN_BUDGET", "").strip()
+    if raw_budget:
+        try:
+            monthly_budget = int(raw_budget)
+        except ValueError:
+            logger.warning("MONTHLY_TOKEN_BUDGET is not a valid integer, ignoring")
+
+    return Config(bot_token=token, authorized_user_ids=user_ids, monthly_token_budget=monthly_budget)

@@ -12,9 +12,11 @@ from .bot import (
     require_auth,
     start_handler,
     status_handler,
+    usage_handler,
 )
 from .config import load_config
 from .session import OpenCodeSession
+from .usage import UsageTracker
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -38,16 +40,17 @@ def main() -> None:
         ApplicationBuilder().token(config.bot_token).post_shutdown(shutdown).build()
     )
     application.bot_data["sessions"] = {}
+    application.bot_data["usage_tracker"] = UsageTracker()
+    application.bot_data["monthly_token_budget"] = config.monthly_token_budget
 
     auth = require_auth(config)
 
     application.add_handler(CommandHandler("start", auth(start_handler)))
     application.add_handler(CommandHandler("status", auth(status_handler)))
     application.add_handler(CommandHandler("cancel", auth(cancel_handler)))
+    application.add_handler(CommandHandler("usage", auth(usage_handler)))
     application.add_handler(CommandHandler("help", auth(help_handler)))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, auth(message_handler))
-    )
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auth(message_handler)))
 
     logger.info("Bot polling started.")
     application.run_polling(drop_pending_updates=True)

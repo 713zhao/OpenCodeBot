@@ -47,9 +47,7 @@ async def test_full_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
 
     mock_process = MagicMock()
     mock_process.stdout = MagicMock()
-    mock_process.stdout.readline = AsyncMock(
-        side_effect=[b"Analysing...\n", b"Done.\n", b""]
-    )
+    mock_process.stdout.readline = AsyncMock(side_effect=[b"Analysing...\n", b"Done.\n", b""])
     mock_process.stdin = MagicMock()
     mock_process.stdin.write = MagicMock()
     mock_process.stdin.drain = AsyncMock()
@@ -61,7 +59,10 @@ async def test_full_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # --- /start ---
     update = make_update(USER_ID)
-    context = make_context(bot_data, ["existing", "/tmp", "Integration", "test", "task"])
+    context = make_context(
+        bot_data, ["opencode", "existing", "/tmp", "Integration", "test", "task"]
+    )
+    context.user_data = {}
 
     with (
         patch(
@@ -87,6 +88,7 @@ async def test_full_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     # Send input before sleeping so the session hasn't transitioned to COMPLETED yet.
     msg_update = make_update(USER_ID, text="y")
     msg_context = make_context(bot_data)
+    msg_context.user_data = {}
     with patch(
         "asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)
     ) as mock_continue:
@@ -102,13 +104,13 @@ async def test_full_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     stat_context = make_context(bot_data)
     await status_handler(stat_update, stat_context)
     status_reply = stat_update.message.reply_text.call_args.args[0]
-    assert "RUNNING" in status_reply or "COMPLETED" in status_reply
+    assert any(s in status_reply for s in ("RUNNING", "COMPLETED", "AWAITING INPUT"))
 
     # Wait for reader to exhaust readline (returns b"")
     await asyncio.sleep(0.3)
 
     session: OpenCodeSession = sessions[USER_ID]  # type: ignore[index,assignment]
-    assert session.state in {SessionState.RUNNING, SessionState.COMPLETED}
+    assert session.state in {SessionState.RUNNING, SessionState.COMPLETED, SessionState.AWAITING_INPUT}
 
 
 async def test_cancel_terminates_session() -> None:

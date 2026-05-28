@@ -197,7 +197,7 @@ async def test_reader_task_lines_and_sentinel() -> None:
     await session._read_output()
 
     assert session.exit_code == 0
-    assert session.state is SessionState.COMPLETED
+    assert session.state is SessionState.AWAITING_INPUT  # kept alive for follow-up
     assert "line1\n" in session.recent_output
     assert "line2\n" in session.recent_output
 
@@ -435,9 +435,9 @@ async def test_reader_returns_to_running_after_prompt() -> None:
         wait_return=0,
     )
     session.process = proc
-    # We need to capture state mid-read; test via post-hoc state (COMPLETED after EOF)
+    # After EOF with exit_code=0 the session stays alive for follow-up (AWAITING_INPUT)
     await session._read_output()
-    assert session.state is SessionState.COMPLETED
+    assert session.state is SessionState.AWAITING_INPUT
 
 
 # ---------------------------------------------------------------------------

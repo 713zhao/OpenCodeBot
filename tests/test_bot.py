@@ -83,9 +83,7 @@ async def test_none_user_rejected(mock_update: MagicMock, mock_context: MagicMoc
     handler.assert_not_awaited()
 
 
-async def test_wraps_preserves_name(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_wraps_preserves_name(mock_update: MagicMock, mock_context: MagicMock) -> None:
     config = Config(bot_token="t", authorized_user_ids=frozenset({USER_ID}))
 
     async def my_handler(update: MagicMock, context: MagicMock) -> None:
@@ -122,31 +120,26 @@ async def test_start_no_args(mock_update: MagicMock, mock_context: MagicMock) ->
     assert "Usage:" in text
 
 
-async def test_start_invalid_task_type(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_start_invalid_task_type(mock_update: MagicMock, mock_context: MagicMock) -> None:
     mock_context.args = ["foo", "/tmp", "desc"]
     await start_handler(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args.args[0]
     assert "Invalid task type" in text
 
 
-async def test_start_directory_not_found(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_start_directory_not_found(mock_update: MagicMock, mock_context: MagicMock) -> None:
     mock_context.args = ["existing", "/nonexistent/path", "desc"]
     with patch.object(Path, "exists", return_value=False):
         await start_handler(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args.args[0]
-    assert "❌ Directory not found" in text
+    assert "⚠️ Directory not found" in text
 
 
-async def test_start_path_not_a_directory(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_start_path_not_a_directory(mock_update: MagicMock, mock_context: MagicMock) -> None:
     mock_context.args = ["existing", "/tmp/somefile", "desc"]
-    with patch.object(Path, "exists", return_value=True), patch.object(
-        Path, "is_dir", return_value=False
+    with (
+        patch.object(Path, "exists", return_value=True),
+        patch.object(Path, "is_dir", return_value=False),
     ):
         await start_handler(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args.args[0]
@@ -158,9 +151,11 @@ async def test_start_session_already_running(
 ) -> None:
     mock_context.args = ["existing", "/tmp", "desc"]
     mock_context.bot_data["sessions"][USER_ID] = MagicMock()
-    with patch.object(Path, "exists", return_value=True), patch.object(
-        Path, "is_dir", return_value=True
-    ), patch("os.access", return_value=True):
+    with (
+        patch.object(Path, "exists", return_value=True),
+        patch.object(Path, "is_dir", return_value=True),
+        patch("os.access", return_value=True),
+    ):
         await start_handler(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args.args[0]
     assert "⚠️ A session is already running" in text
@@ -171,9 +166,7 @@ async def test_start_session_already_running(
 # ---------------------------------------------------------------------------
 
 
-async def test_start_handler_success(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_start_handler_success(mock_update: MagicMock, mock_context: MagicMock) -> None:
     mock_context.args = ["existing", "/home/dev/proj", "Fix", "the", "bug"]
 
     with (
@@ -195,9 +188,7 @@ async def test_start_handler_success(
 # ---------------------------------------------------------------------------
 
 
-async def test_status_handler_running(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_status_handler_running(mock_update: MagicMock, mock_context: MagicMock) -> None:
     mock_session = MagicMock()
     mock_session.get_status.return_value = SessionStatus(
         state=SessionState.RUNNING,
@@ -238,9 +229,7 @@ async def test_status_handler_awaiting_input(
     assert "AWAITING INPUT" in text
 
 
-async def test_status_handler_no_session(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_status_handler_no_session(mock_update: MagicMock, mock_context: MagicMock) -> None:
     await status_handler(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args.args[0]
     assert "💤 No active session" in text
@@ -251,9 +240,7 @@ async def test_status_handler_no_session(
 # ---------------------------------------------------------------------------
 
 
-async def test_cancel_active_session(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_cancel_active_session(mock_update: MagicMock, mock_context: MagicMock) -> None:
     mock_session = MagicMock()
     mock_session.task.description = "my task"
     mock_session.terminate = AsyncMock()
@@ -268,9 +255,7 @@ async def test_cancel_active_session(
     assert "my task" in text
 
 
-async def test_cancel_no_session(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_cancel_no_session(mock_update: MagicMock, mock_context: MagicMock) -> None:
     await cancel_handler(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args.args[0]
     assert "ℹ️ No active session" in text
@@ -281,9 +266,8 @@ async def test_cancel_no_session(
 # ---------------------------------------------------------------------------
 
 
-async def test_message_handler_running(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_message_handler_running(mock_update: MagicMock, mock_context: MagicMock) -> None:
+    mock_context.user_data = {}
     mock_update.message.text = "hello"
     mock_session = MagicMock()
     mock_session.state = SessionState.RUNNING
@@ -293,12 +277,13 @@ async def test_message_handler_running(
     await message_handler(mock_update, mock_context)
 
     mock_session.send_input.assert_awaited_once_with("hello")
-    mock_update.message.reply_text.assert_not_called()
+    mock_update.message.reply_text.assert_called_once_with("⏳ Processing your input...")
 
 
 async def test_message_handler_awaiting_input(
     mock_update: MagicMock, mock_context: MagicMock
 ) -> None:
+    mock_context.user_data = {}
     mock_update.message.text = "y"
     mock_session = MagicMock()
     mock_session.state = SessionState.AWAITING_INPUT
@@ -310,9 +295,8 @@ async def test_message_handler_awaiting_input(
     mock_session.send_input.assert_awaited_once_with("y")
 
 
-async def test_message_handler_no_session(
-    mock_update: MagicMock, mock_context: MagicMock
-) -> None:
+async def test_message_handler_no_session(mock_update: MagicMock, mock_context: MagicMock) -> None:
+    mock_context.user_data = {}  # Ensure pending_mkdir is not matched accidentally
     await message_handler(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args.args[0]
     assert "No active session" in text
@@ -321,6 +305,7 @@ async def test_message_handler_no_session(
 async def test_message_handler_completed_session(
     mock_update: MagicMock, mock_context: MagicMock
 ) -> None:
+    mock_context.user_data = {}
     mock_session = MagicMock()
     mock_session.state = SessionState.COMPLETED
     mock_context.bot_data["sessions"][USER_ID] = mock_session
@@ -334,6 +319,7 @@ async def test_message_handler_completed_session(
 async def test_message_handler_failed_session(
     mock_update: MagicMock, mock_context: MagicMock
 ) -> None:
+    mock_context.user_data = {}
     mock_session = MagicMock()
     mock_session.state = SessionState.FAILED
     mock_context.bot_data["sessions"][USER_ID] = mock_session

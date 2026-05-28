@@ -18,7 +18,9 @@ fi
 cd "$SCRIPT_DIR"
 
 # Activate virtual environment if it exists
-if [[ -f "$SCRIPT_DIR/.venv/bin/activate" ]]; then
+if [[ -f "$SCRIPT_DIR/venv/bin/activate" ]]; then
+    source "$SCRIPT_DIR/venv/bin/activate"
+elif [[ -f "$SCRIPT_DIR/.venv/bin/activate" ]]; then
     source "$SCRIPT_DIR/.venv/bin/activate"
 fi
 
